@@ -1327,6 +1327,27 @@ class ClearMLCallback(TrainerCallback):
         self._initialized = False
         self._clearml_task = None
 
+    def cast_keys_to_string(self, d, changed_keys=[]):
+        for key in d.keys():
+            if not isinstance(key, str):
+                casted_key = str(key)
+                d[casted_key] = d.pop(key)
+                changed_keys.append((casted_key, key, type(key)))
+            else:
+                casted_key = key
+            if isinstance(d[casted_key], dict):
+                d[casted_key], changed_keys = self.cast_keys_to_string(d[casted_key], changed_keys)
+        return d, changed_keys
+
+    def cast_keys_back(self, d, changed_keys):
+        for casted_key, original_key, key_type in changed_keys[:]:
+            if isinstance(d.get(casted_key), dict):
+                d[casted_key], _ = self.cast_keys_back(d[casted_key], changed_keys)
+            if casted_key in d:
+                d[original_key] = d.pop(casted_key)
+                original_key = key_type(original_key)
+        return d, changed_keys
+
     def setup(self, args, state, model, tokenizer, **kwargs):
         if self._clearml is None:
             return
@@ -1351,9 +1372,13 @@ class ClearMLCallback(TrainerCallback):
                     self._initialized = True
                     logger.info("ClearML Task has been initialized.")
 
+            args, changed_keys = self.cast_keys_to_string(args)
             self._clearml_task.connect(args, "Args")
+            args = self.cast_keys_back(args, changed_keys)
             if hasattr(model, "config") and model.config is not None:
-                self._clearml_task.connect(model.config, "Model Configuration")
+                model_config, changed_keys = self.cast_keys_to_string(model.config)
+                self._clearml_task.connect(model_config, "Model Configuration")
+                model.config = self.cast_keys_back(model_config, changed_keys)
 
     def on_train_begin(self, args, state, control, model=None, tokenizer=None, **kwargs):
         if self._clearml is None:
