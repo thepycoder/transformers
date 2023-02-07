@@ -59,7 +59,7 @@ if TYPE_CHECKING and _has_neptune:
 
 from .trainer_callback import ProgressCallback, TrainerCallback  # noqa: E402
 from .trainer_utils import PREFIX_CHECKPOINT_DIR, BestRun, IntervalStrategy  # noqa: E402
-from .training_args import ParallelMode  # noqa: E402
+from .training_args import ParallelMode, TrainingArguments  # noqa: E402
 from .utils import ENV_VARS_TRUE_VALUES, is_torch_tpu_available  # noqa: E402
 
 
@@ -1327,26 +1327,32 @@ class ClearMLCallback(TrainerCallback):
         self._initialized = False
         self._clearml_task = None
 
-    def cast_keys_to_string(self, d, changed_keys=[]):
+    def cast_keys_to_string(self, d, changed_keys=dict()):
+        nd = dict()
         for key in d.keys():
             if not isinstance(key, str):
                 casted_key = str(key)
-                d[casted_key] = d.pop(key)
-                changed_keys.append((casted_key, key, type(key)))
+                changed_keys[casted_key] = key
             else:
                 casted_key = key
-            if isinstance(d[casted_key], dict):
-                d[casted_key], changed_keys = self.cast_keys_to_string(d[casted_key], changed_keys)
-        return d, changed_keys
+            if isinstance(d[key], dict):
+                nd[casted_key], changed_keys = self.cast_keys_to_string(d[key], changed_keys)
+            else:
+                nd[casted_key] = d[key]
+        return nd, changed_keys
 
     def cast_keys_back(self, d, changed_keys):
-        for casted_key, original_key, key_type in changed_keys[:]:
-            if isinstance(d.get(casted_key), dict):
-                d[casted_key], _ = self.cast_keys_back(d[casted_key], changed_keys)
-            if casted_key in d:
-                d[original_key] = d.pop(casted_key)
-                original_key = key_type(original_key)
-        return d, changed_keys
+        nd = dict()
+        for key in d.keys():
+            if key in changed_keys:
+                original_key = changed_keys[key]
+            else:
+                original_key = key
+            if isinstance(d[key], dict):
+                nd[original_key], changed_keys = self.cast_keys_back(d[key], changed_keys)
+            else:
+                nd[original_key] = d[key]
+        return nd, changed_keys
 
     def setup(self, args, state, model, tokenizer, **kwargs):
         if self._clearml is None:
@@ -1372,13 +1378,15 @@ class ClearMLCallback(TrainerCallback):
                     self._initialized = True
                     logger.info("ClearML Task has been initialized.")
 
-            args, changed_keys = self.cast_keys_to_string(args)
+            args_class = type(args)
+            args, changed_keys = self.cast_keys_to_string(args.to_dict())
             self._clearml_task.connect(args, "Args")
-            args = self.cast_keys_back(args, changed_keys)
+            args = args_class(**self.cast_keys_back(args, changed_keys)[0])
             if hasattr(model, "config") and model.config is not None:
-                model_config, changed_keys = self.cast_keys_to_string(model.config)
+                model_config_class = type(model.config)
+                model_config, changed_keys = self.cast_keys_to_string(model.config.to_dict())
                 self._clearml_task.connect(model_config, "Model Configuration")
-                model.config = self.cast_keys_back(model_config, changed_keys)
+                model.config = model_config_class(self.cast_keys_back(model_config, changed_keys)[0])
 
     def on_train_begin(self, args, state, control, model=None, tokenizer=None, **kwargs):
         if self._clearml is None:
