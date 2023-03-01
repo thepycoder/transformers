@@ -1453,7 +1453,13 @@ class ClearMLCallback(TrainerCallback):
 
             self._clearml_task.connect(args, "Args")
             if hasattr(model, "config") and model.config is not None:
-                self._clearml_task.connect(model.config, "Model Configuration")
+                # cast nested keys to string here to avoid a warning
+                # STEP CACHE: while casting, remember the nonsting types of nested strings 
+                model.config = self._clearml_task.connect(model.config, "Model Configuration")
+                # handle id2label separately for safety
+                if isinstance(model.config.get("id2label"), dict):
+                    model.config["id2label"] = {int(k): v for k, v in model.config["id2label"].items()}
+                # now cast all the other keys that we cached at STEP CACHE
 
     def on_train_begin(self, args, state, control, model=None, tokenizer=None, **kwargs):
         if self._clearml is None:
